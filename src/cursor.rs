@@ -21,9 +21,12 @@ use std::io::IoSlice;
 
 pub trait SliceCursor: bytes::Buf + Clone {
     fn has_atleast(&self, len: usize) -> bool {
-        self.remaining() > len
+        self.remaining() >= len
     }
 }
+
+impl SliceCursor for bytes::Bytes {}
+impl SliceCursor for bytes::BytesMut {}
 
 pub trait SliceCursorMut: bytes::BufMut + SliceCursor {}
 
@@ -262,8 +265,6 @@ mod tests {
     mod a {
         use super::super::*;
         use bytes::{BufMut, BytesMut};
-
-        impl SliceCursor for BytesMut {}
 
         #[test]
         fn slice_cursor_has_atleast() {

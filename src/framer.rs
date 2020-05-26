@@ -149,3 +149,14 @@ impl Framer {
         FrameIter { framer: self }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    macro_rules! to_buf {
+        ($x: expr) => {
+            bytes::BytesMut::from_iter($x.iter()).freeze()
+        };
+    }
+
+    fn max_frame_size() {}
+}
