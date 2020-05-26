@@ -51,64 +51,67 @@ impl<'a> FrameIter<'a> {
                 match parser::varint(header_view) {
                     Ok((view, len)) => {
                         if len < 0 || len as usize > self.framer.max_frame_size {
-                            return Err(FrameError::DecodeError)
+                            return Err(FrameError::DecodeError);
                         }
 
                         let data_start = view.cursor();
                         let mut data_end = data_start.clone();
                         let valid = data_end.advance(&self.framer.ring, len as usize);
-                        
+
                         // If this is valid, then we can split the framer ring and spit out a
                         // frame
                         if valid {
-                            return Ok(Frame{
+                            return Ok(Frame {
                                 packet: self.framer.ring.partition_before(&data_end),
                                 // This cursor is still valid - it will always be less than
                                 // data_end
                                 data_start: data_start,
-                            })
-                            // the state right now is WaitingForHeader, which is correct for
-                            // whenever this gets called again
+                            });
+                        // the state right now is WaitingForHeader, which is correct for
+                        // whenever this gets called again
                         } else {
                             // doesn't look like we have all the data quite yet, set our state
                             // and exit
-                            self.framer.state = FramerState::WaitingForTailingData(
-                                TailingDataState{
+                            self.framer.state =
+                                FramerState::WaitingForTailingData(TailingDataState {
                                     data_start: data_start,
                                     data_end: data_end,
-                                }
-                            );
+                                });
 
-                            return Err(FrameError::WaitingForData(data_end.run_off_end(&self.framer.ring)))
+                            return Err(FrameError::WaitingForData(
+                                data_end.run_off_end(&self.framer.ring),
+                            ));
                         }
                     }
                     Err(nom::Err::Incomplete(_)) => {
                         // We don't have enough, no progression.
-                        return Err(FrameError::WaitingForHeader)
+                        return Err(FrameError::WaitingForHeader);
                     }
                     Err(nom::Err::Error(_)) | Err(nom::Err::Failure(_)) => {
                         // The parser probably overran - whatever is on the other end of this
                         // sent us bad data. Fatal the framer
-                        return Err(FrameError::DecodeError)
+                        return Err(FrameError::DecodeError);
                     }
                 }
             }
             FramerState::WaitingForTailingData(state) => {
                 // We already have a header, but need to wait for the rest of the data to come
                 // in
-            
+
                 let valid = state.data_end.true_up(&self.framer.ring);
                 if valid {
-                    let f = Frame{
+                    let f = Frame {
                         packet: self.framer.ring.partition_before(&state.data_end),
                         // This cursor is still valid - it will always be less than
                         // data_end
                         data_start: state.data_start,
                     };
                     self.framer.state = FramerState::WaitingForHeader;
-                    return Ok(f)
+                    return Ok(f);
                 } else {
-                    return Err(FrameError::WaitingForData(state.data_end.run_off_end(&self.framer.ring)))
+                    return Err(FrameError::WaitingForData(
+                        state.data_end.run_off_end(&self.framer.ring),
+                    ));
                 }
             }
         }
