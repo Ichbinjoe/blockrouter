@@ -22,7 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - name: Build
     - name: Run cargo-tarpaulin
       uses: actions-rs/tarpaulin@v0.1
       env:
