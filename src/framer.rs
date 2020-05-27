@@ -22,6 +22,7 @@ use std::collections::VecDeque;
 use super::cursor;
 use super::parser;
 
+#[derive(Debug)]
 pub struct Frame {
     packet: cursor::Multibytes,
     data_start: cursor::Cursor,
@@ -31,6 +32,7 @@ pub struct FrameIter<'a> {
     framer: &'a mut Framer,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum FrameError {
     /// We are waiting for a size header. It should be finished in a few bytes, but since we don't
     /// know, we won't hint a size.
@@ -43,7 +45,7 @@ pub enum FrameError {
 }
 
 impl<'a> FrameIter<'a> {
-    fn next(&'a mut self) -> Result<Frame, FrameError> {
+    pub fn next(&mut self) -> Result<Frame, FrameError> {
         match &mut self.framer.state {
             FramerState::WaitingForHeader => {
                 // Attempt to decode a header
@@ -152,11 +154,142 @@ impl Framer {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use bytes::BytesMut;
+
+    use std::cell::Cell;
+    use std::iter::FromIterator;
+
     macro_rules! to_buf {
         ($x: expr) => {
             bytes::BytesMut::from_iter($x.iter()).freeze()
         };
     }
 
-    fn max_frame_size() {}
+    fn varint_len(mut v: usize) -> usize {
+        let mut i = 1;
+        loop {
+            v >>= 7;
+            if v == 0 {
+                return i;
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    macro_rules! validate_frame {
+        ($frame: expr, $len: expr) => {
+            let c = $frame.packet.cursor();
+            assert_eq!(c.remaining(&$frame.packet), varint_len($len) + $len);
+        };
+    }
+
+    #[test]
+    fn max_frame_size() {
+        let mut f = Framer::new(128, 1);
+        // Prefix length of 129
+        let b = to_buf!([0x80, 0x02]);
+        assert_eq!(f.frame(b).next().unwrap_err(), FrameError::DecodeError);
+    }
+
+    #[test]
+    fn invalid_varint() {
+        let mut f = Framer::new(128, 1);
+        // Invalid varint should result in an error
+        let b = to_buf!([0x80, 0x80, 0x80, 0x80, 0x80, 0x02]);
+        assert_eq!(f.frame(b).next().unwrap_err(), FrameError::DecodeError);
+    }
+
+    #[test]
+    fn single_frame() {
+        let mut f = Framer::new(128, 1);
+        let b = to_buf!([0x3, 0x0, 0x1, 0x2]);
+        let mut iter = f.frame(b);
+        {
+            let packet1 = (&mut iter).next();
+            validate_frame!((&packet1).as_ref().unwrap(), 3);
+        }
+        let eof = iter.next();
+        assert_eq!(
+            eof.as_ref().unwrap_err().clone(),
+            FrameError::WaitingForHeader
+        );
+    }
+
+    #[test]
+    fn single_frame_multi_invoke() {
+        let mut f = Framer::new(128, 1);
+        {
+            let mut iter = f.frame(to_buf!([0x3]));
+            assert_eq!(iter.next().unwrap_err(), FrameError::WaitingForData(3));
+        }
+
+        {
+            let mut iter = f.frame(to_buf!([0x0]));
+            assert_eq!(iter.next().unwrap_err(), FrameError::WaitingForData(2));
+        }
+
+        {
+            let mut iter = f.frame(to_buf!([0x1]));
+            assert_eq!(iter.next().unwrap_err(), FrameError::WaitingForData(1));
+        }
+
+        {
+            let mut iter = f.frame(to_buf!([0x2]));
+            {
+                let packet1 = (&mut iter).next();
+                validate_frame!((&packet1).as_ref().unwrap(), 3);
+            }
+            let eof = iter.next();
+            assert_eq!(
+                eof.as_ref().unwrap_err().clone(),
+                FrameError::WaitingForHeader
+            );
+        }
+    }
+
+    #[test]
+    fn multi_frame_single_invoke() {
+        let mut f = Framer::new(128, 1);
+        let b = to_buf!([0x3, 0x0, 0x1, 0x2, 0x2, 0x0, 0x1]);
+        let mut iter = f.frame(b);
+        {
+            let packet1 = (&mut iter).next();
+            validate_frame!((&packet1).as_ref().unwrap(), 3);
+        }
+        {
+            let packet1 = (&mut iter).next();
+            validate_frame!((&packet1).as_ref().unwrap(), 2);
+        }
+        let eof = iter.next();
+        assert_eq!(
+            eof.as_ref().unwrap_err().clone(),
+            FrameError::WaitingForHeader
+        );
+    }
+
+    #[test]
+    fn odd_partition() {
+        let mut f = Framer::new(128, 1);
+        {
+            let mut iter = f.frame(to_buf!([0x3, 0x0, 0x1]));
+            assert_eq!(iter.next().unwrap_err(), FrameError::WaitingForData(1));
+        }
+
+        let mut iter = f.frame(to_buf!([0x2, 0x2, 0x0, 0x1, 0x4, 0x0]));
+        {
+            let packet1 = (&mut iter).next();
+            validate_frame!((&packet1).as_ref().unwrap(), 3);
+        }
+        {
+            let packet1 = (&mut iter).next();
+            validate_frame!((&packet1).as_ref().unwrap(), 2);
+        }
+        let eof = iter.next();
+        assert_eq!(
+            eof.as_ref().unwrap_err().clone(),
+            FrameError::WaitingForData(3)
+        );
+    }
 }

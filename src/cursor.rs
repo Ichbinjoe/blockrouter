@@ -30,6 +30,7 @@ impl SliceCursor for bytes::BytesMut {}
 
 pub trait SliceCursorMut: bytes::BufMut + SliceCursor {}
 
+#[derive(Debug)]
 pub struct Multibytes {
     b: VecDeque<bytes::Bytes>,
 }
@@ -316,7 +317,7 @@ mod tests {
         assert_eq!(cursor.remaining(&mb), 7);
         cursor.advance(&mb, 7);
         assert_eq!(cursor.remaining(&mb), 0);
-        !cursor.advance(&mb, 1);
+        cursor.advance(&mb, 1);
         assert_eq!(cursor.remaining(&mb), 0);
     }
 
