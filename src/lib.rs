@@ -18,8 +18,10 @@
 extern crate bytes;
 extern crate nom;
 
+pub mod crypto;
 pub mod cursor;
 pub mod framer;
+pub mod mbedtls;
 pub mod parser;
 
 #[cfg(test)]
