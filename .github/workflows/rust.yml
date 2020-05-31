@@ -15,7 +15,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Install mbedtls
-      run: sudo apt install libmbedtls-dev
+      run: sudo apt install libmbedtls-dev && sudo ln -s /usr/lib/x86_64-linux-gnu/libmbedcrypto.so.0 /usr/lib/libmbedcrypto.so
     - name: Build
       run: cargo build --verbose
     - name: Run tests
@@ -25,7 +25,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Install mbedtls
-      run: sudo apt install libmbedtls-dev
+      run: sudo apt install libmbedtls-dev && sudo ln -s /usr/lib/x86_64-linux-gnu/libmbedcrypto.so.0 /usr/lib/libmbedcrypto.so
     - name: Run cargo-tarpaulin
       uses: actions-rs/tarpaulin@v0.1
       env:
