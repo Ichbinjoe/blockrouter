@@ -18,14 +18,27 @@
 extern crate libc;
 use libc::*;
 
-use std::pin::Pin;
 use std::mem::MaybeUninit;
 
 #[repr(C)]
-pub struct MbedAesContext{
+pub struct MbedAesContext {
     nr: c_int,
     rk: *mut c_uint,
     buf: [c_uint; 68],
+    // This isn't part of the original MbedAesContext, but is a workaround to the fact that
+    // MbedAesContext can't be moved - this stores the offset of the rk pointer in relation to the
+    // address of the parent structure. rk can then be reconstructed via pointer math
+    off: usize,
+}
+
+impl MbedAesContext {
+    unsafe fn solidify_off(&mut self) {
+        self.off = (self.rk as usize) - ((self as *const MbedAesContext) as usize)
+    }
+
+    unsafe fn update_rk(&mut self) {
+        self.rk = (((self as *const MbedAesContext) as usize) + self.off) as *mut c_uint;
+    }
 }
 
 #[repr(i32)]
@@ -35,7 +48,7 @@ pub enum CryptMode {
     Decrypt = 0,
 }
 
-#[link(name = "mbedcrypto", kind="static")]
+#[link(name = "mbedcrypto", kind = "static")]
 extern "C" {
     fn mbedtls_aes_init(ctx: *const MbedAesContext);
     fn mbedtls_aes_free(ctx: *const MbedAesContext);
@@ -62,39 +75,43 @@ pub struct AesCryptCfb8 {
 
 impl AesCryptCfb8 {
     /// Creates a new AesCryptCfb8 with the given key
-    pub fn new(key: [c_uchar; 16]) -> Pin<Box<AesCryptCfb8>> {
+    pub fn new(key: [c_uchar; 16]) -> AesCryptCfb8 {
         // SAFETY: idk looks safe to me
         unsafe {
-            let b = Box::pin(
-                AesCryptCfb8{
-                    ctx: MaybeUninit::zeroed().assume_init(),
-                    iv: key,
-                    _pin: std::marker::PhantomPinned{},
-                }
-            );
+            let mut b = AesCryptCfb8 {
+                ctx: MaybeUninit::zeroed().assume_init(),
+                iv: key,
+                _pin: std::marker::PhantomPinned {},
+            };
 
             // Current implementation simply zeros this pointer - its already zeroed, so we don't
             // have to worry about it
             assert!(mbedtls_aes_setkey_enc(&b.ctx, b.iv.as_ptr(), 16 * 8) == 0);
-            return b
+
+            b.ctx.solidify_off();
+
+            return b;
         }
     }
 
     /// Performs an inplace encryption / decryption of the data given depending on the mode passed
-    pub fn process(&self, data: &mut [u8], mode: CryptMode) {
+    pub fn process(&mut self, data: &mut [u8], mode: CryptMode) {
         if data.len() == 0 {
             return;
         }
-        
+
         unsafe {
-            assert!(mbedtls_aes_crypt_cfb8(
-                &self.ctx,
-                mode as c_int,
-                data.len(),
-                self.iv.as_ptr(),
-                data.as_ptr(),
-                data.as_mut_ptr(),
-            ) == 0);
+            self.ctx.update_rk();
+            assert!(
+                mbedtls_aes_crypt_cfb8(
+                    &self.ctx,
+                    mode as c_int,
+                    data.len(),
+                    self.iv.as_ptr(),
+                    data.as_ptr(),
+                    data.as_mut_ptr(),
+                ) == 0
+            );
         }
     }
 }
@@ -112,9 +129,8 @@ mod tests {
     use super::*;
     #[test]
     fn bindgen_test_layout_MbedAesContext() {
-        assert_eq!(
-            ::std::mem::size_of::<MbedAesContext>(),
-            288usize,
+        assert!(
+            ::std::mem::size_of::<MbedAesContext>() >= 288usize,
             concat!("Size of: ", stringify!(MbedAesContext))
         );
         assert_eq!(
