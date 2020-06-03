@@ -50,7 +50,7 @@ pub enum CryptMode {
 
 #[link(name = "mbedcrypto", kind = "static")]
 extern "C" {
-    fn mbedtls_aes_init(ctx: *const MbedAesContext);
+    // fn mbedtls_aes_init(ctx: *const MbedAesContext);
     fn mbedtls_aes_free(ctx: *const MbedAesContext);
     fn mbedtls_aes_setkey_enc(
         ctx: *const MbedAesContext,

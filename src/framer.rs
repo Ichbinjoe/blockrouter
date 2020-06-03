@@ -138,7 +138,7 @@ pub struct Framer {
 }
 
 impl Framer {
-    fn new(max_frame_size: usize, buffer_size: usize) -> Framer {
+    pub fn new(max_frame_size: usize, buffer_size: usize) -> Framer {
         Framer {
             max_frame_size,
             ring: cursor::Multibytes::new(VecDeque::with_capacity(buffer_size)),
@@ -146,7 +146,7 @@ impl Framer {
         }
     }
 
-    fn frame<'a>(&'a mut self, b: Bytes) -> FrameIter<'a> {
+    pub fn frame<'a>(&'a mut self, b: Bytes) -> FrameIter<'a> {
         self.ring.append(b);
         FrameIter { framer: self }
     }
