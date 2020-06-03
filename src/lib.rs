@@ -22,6 +22,7 @@ pub mod crypto;
 pub mod cursor;
 pub mod framer;
 pub mod mbedtls;
+pub mod mempool;
 pub mod parser;
 
 #[cfg(test)]

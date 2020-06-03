@@ -10,8 +10,12 @@ build = "build.rs"
 
 [dependencies]
 bytes = "0.5.4"
+crossbeam-queue = "0.2"
+crossbeam-utils = "0.7"
 libc = "0.2"
+memmap = "0.7"
 nom = "5.1.1"
+semaphore = "0.4"
 tokio = { version = "0.2", features = ["rt-core", "rt-threaded", "io-driver"]}
 
 [build-dependencies]
