@@ -15,9 +15,27 @@
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use ::bytes::Buf;
+use ::bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::collections::VecDeque;
 use std::io::IoSlice;
+
+pub trait DirectBuf: bytes::Buf + std::convert::AsRef<[u8]> {
+    fn split_to(&mut self, at: usize) -> Self;
+}
+
+impl DirectBuf for Bytes {
+    fn split_to(&mut self, at: usize) -> Self {
+        self.split_to(at)
+    }
+}
+
+pub trait DirectBufMut: bytes::BufMut + DirectBuf + std::convert::AsMut<[u8]>{}
+
+impl DirectBuf for BytesMut {
+    fn split_to(&mut self, at: usize) -> Self {
+        self.split_to(at)
+    }
+}
 
 pub trait SliceCursor: bytes::Buf + Clone {
     fn has_atleast(&self, len: usize) -> bool {
@@ -25,14 +43,15 @@ pub trait SliceCursor: bytes::Buf + Clone {
     }
 }
 
-impl SliceCursor for bytes::Bytes {}
-impl SliceCursor for bytes::BytesMut {}
+impl SliceCursor for Bytes {}
 
-pub trait SliceCursorMut: bytes::BufMut + SliceCursor {}
+pub trait SliceCursorMut: BufMut + SliceCursor {}
+
+impl SliceCursor for BytesMut {}
 
 #[derive(Debug)]
-pub struct Multibytes {
-    b: VecDeque<bytes::Bytes>,
+pub struct Multibytes<T: DirectBuf> {
+    b: VecDeque<T>,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq)]
@@ -42,12 +61,12 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    pub fn advance(&mut self, b: &Multibytes, i: usize) -> bool {
+    pub fn advance<T: DirectBuf>(&mut self, b: &Multibytes<T>, i: usize) -> bool {
         self.i += i;
         self.true_up(b)
     }
 
-    pub fn true_up(&mut self, b: &Multibytes) -> bool {
+    pub fn true_up<T: DirectBuf>(&mut self, b: &Multibytes<T>) -> bool {
         loop {
             let r = match b.b.get(self.of) {
                 Some(s) => s,
@@ -57,7 +76,7 @@ impl Cursor {
                     return self.of == b.b.len() && self.i == 0;
                 }
             };
-            let len = r.len();
+            let len = r.remaining();
             if self.i >= len {
                 self.i -= len;
                 self.of += 1;
@@ -67,11 +86,11 @@ impl Cursor {
         }
     }
 
-    pub fn remaining(&self, b: &Multibytes) -> usize {
+    pub fn remaining<T: DirectBuf>(&self, b: &Multibytes<T>) -> usize {
         let blen =
             b.b.iter()
                 .skip(self.of)
-                .fold(0, |prev, next| prev + next.len());
+                .fold(0, |prev, next| prev + next.remaining());
         if blen <= self.i {
             0
         } else {
@@ -79,10 +98,10 @@ impl Cursor {
         }
     }
 
-    pub fn has_atleast(&self, b: &Multibytes, len: usize) -> bool {
+    pub fn has_atleast<T: DirectBuf>(&self, b: &Multibytes<T>, len: usize) -> bool {
         let mut left = len + self.i;
         for buf in b.b.iter().skip(self.of) {
-            let bl = buf.len();
+            let bl = buf.remaining();
             if bl >= left {
                 return true;
             }
@@ -91,7 +110,11 @@ impl Cursor {
         return left == 0;
     }
 
-    pub fn bytes_vectored<'a>(&self, mb: &'a Multibytes, dst: &mut [IoSlice<'a>]) -> usize {
+    pub fn bytes_vectored<'a, T: DirectBuf>(
+        &self,
+        mb: &'a Multibytes<T>,
+        dst: &mut [IoSlice<'a>],
+    ) -> usize {
         let dstlen = dst.len();
         if dstlen < 1 {
             return 0;
@@ -105,16 +128,17 @@ impl Cursor {
             None => return 0,
         };
 
-        dst[0] = IoSlice::new(&first[self.i..]);
+        dst[0] = IoSlice::new(&first.as_ref()[self.i..]);
 
         // Others can just be slammed in there, no problems
         let mut i = 1;
         while let Some(item) = iter.next() {
-            if item.len() == 0 {
+            if item.remaining() == 0 {
                 continue;
             }
 
-            dst[i] = IoSlice::new(&item[..]);
+
+            dst[i] = IoSlice::new(&item.as_ref()[..]);
             i += 1;
             if i >= dstlen {
                 break;
@@ -123,13 +147,13 @@ impl Cursor {
         return i;
     }
 
-    pub fn run_off_end(&self, b: &Multibytes) -> usize {
+    pub fn run_off_end<T: DirectBuf>(&self, b: &Multibytes<T>) -> usize {
         match b.b.get(self.of) {
             Some(p) => {
                 // If this isn't the last page, then this will be in bounds (or it wasn't trued
                 // up) and return 0. Otherwise, this will work properly.
 
-                let len = p.len();
+                let len = p.remaining();
                 if self.i > len {
                     self.i - len
                 } else {
@@ -154,8 +178,8 @@ macro_rules! must_be_some {
     };
 }
 
-impl Multibytes {
-    pub fn new(b: VecDeque<bytes::Bytes>) -> Multibytes {
+impl<T: DirectBuf> Multibytes<T> {
+    pub fn new(b: VecDeque<T>) -> Multibytes<T> {
         Multibytes { b }
     }
 
@@ -163,12 +187,12 @@ impl Multibytes {
         Cursor { of: 0, i: 0 }
     }
 
-    pub fn append(&mut self, b: bytes::Bytes) {
+    pub fn append(&mut self, b: T) {
         self.b.push_back(b)
     }
 
     /// Before using this method, a Cursor should be 'trued up'
-    pub fn partition_before(&mut self, c: &Cursor) -> Multibytes {
+    pub fn split_to(&mut self, c: &Cursor) -> Self {
         // If our index into a buffer is 0, then we don't actually have to split it. We just have
         // to not carry it over
         let full_pages = match c.i {
@@ -206,20 +230,24 @@ impl Multibytes {
         return Multibytes { b };
     }
 
-    pub fn view<'a>(&'a self) -> MultibytesView<'a> {
+    pub fn view<'a>(&'a self) -> MultibytesView<'a, T> {
         MultibytesView {
             b: self,
             c: self.cursor(),
         }
     }
 }
+/*
+impl<T: DirectBuf> Multibytes<T> {
 
-pub struct MultibytesView<'a> {
-    b: &'a Multibytes,
+}*/
+
+pub struct MultibytesView<'a, T: DirectBuf> {
+    b: &'a Multibytes<T>,
     c: Cursor,
 }
 
-impl<'a> Buf for MultibytesView<'a> {
+impl<'a, T: DirectBuf> Buf for MultibytesView<'a, T> {
     fn remaining(&self) -> usize {
         self.c.remaining(self.b)
     }
@@ -240,13 +268,13 @@ impl<'a> Buf for MultibytesView<'a> {
     }
 }
 
-impl<'a> SliceCursor for MultibytesView<'a> {
+impl<'a, T: DirectBuf> SliceCursor for MultibytesView<'a, T> {
     fn has_atleast(&self, len: usize) -> bool {
         self.c.has_atleast(self.b, len)
     }
 }
 
-impl<'a> Clone for MultibytesView<'a> {
+impl<'a, T: DirectBuf> Clone for MultibytesView<'a, T> {
     fn clone(&self) -> Self {
         MultibytesView {
             b: self.b,
@@ -255,7 +283,7 @@ impl<'a> Clone for MultibytesView<'a> {
     }
 }
 
-impl<'a> MultibytesView<'a> {
+impl<'a, T: DirectBuf> MultibytesView<'a, T> {
     pub fn cursor(&self) -> Cursor {
         self.c
     }
@@ -280,7 +308,7 @@ mod tests {
     use super::*;
     use std::iter::FromIterator;
 
-    fn make_test_mb() -> Multibytes {
+    fn make_test_mb() -> Multibytes<bytes::Bytes> {
         let slices = vec![
             vec![1, 2, 3, 4],
             vec![5, 6],
@@ -392,7 +420,7 @@ mod tests {
         let mut mb = make_test_mb();
         let mut cursor = mb.cursor();
 
-        for _ in (0..10) {
+        for _ in 0..10 {
             cursor.advance(&mb, 1);
             assert_eq!(cursor.run_off_end(&mb), 0);
         }
@@ -406,15 +434,15 @@ mod tests {
     }
 
     #[test]
-    fn multibytes_partition_before() {
+    fn multibytes_split_to() {
         let mut mb = make_test_mb();
         let mut cursor = mb.cursor();
 
-        let mb_empty = mb.partition_before(&cursor);
+        let mb_empty = mb.split_to(&cursor);
         assert!(mb_empty.b.len() == 0);
 
         cursor.advance(&mb, 1);
-        let mb_1 = mb.partition_before(&cursor);
+        let mb_1 = mb.split_to(&cursor);
         assert_eq!(mb.b.len(), 5);
         assert_eq!(mb_1.b.len(), 1);
         assert_eq!(mb.b[0].bytes(), [2, 3, 4]);
@@ -425,7 +453,7 @@ mod tests {
         cursor = mb.cursor();
         cursor.advance(&mb, 3);
 
-        let mb_2 = mb.partition_before(&cursor);
+        let mb_2 = mb.split_to(&cursor);
         assert_eq!(mb.b.len(), 4);
         assert_eq!(mb_2.b.len(), 1);
         assert_eq!(mb.b[0].bytes(), [5, 6]);
@@ -436,7 +464,7 @@ mod tests {
         cursor = mb.cursor();
         cursor.advance(&mb, 3);
 
-        let mb_3 = mb.partition_before(&cursor);
+        let mb_3 = mb.split_to(&cursor);
         assert_eq!(mb.b.len(), 2);
         assert_eq!(mb_3.b.len(), 3);
         assert_eq!(mb.b[0].bytes(), [8, 9]);
@@ -449,7 +477,7 @@ mod tests {
         cursor = mb.cursor();
         cursor.advance(&mb, 3);
 
-        let mb_4 = mb.partition_before(&cursor);
+        let mb_4 = mb.split_to(&cursor);
         assert_eq!(mb.b.len(), 0);
         assert_eq!(mb_4.b.len(), 2);
         assert_eq!(mb_4.b[0].bytes(), [8, 9]);

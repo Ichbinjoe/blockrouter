@@ -21,9 +21,12 @@ extern crate memmap;
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::Backoff;
 use std::cell::RefCell;
+use core::mem::MaybeUninit;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use super::cursor::{DirectBuf, DirectBufMut};
 
 pub struct GlobalMemPoolSettings {
     pub buf_size: usize,
@@ -48,14 +51,24 @@ pub struct Part<'a> {
     data: Slice,
 }
 
+impl <'a> Part<'a> {
+    unsafe fn rc(&self) -> *mut u32 {
+        self.parent_slice.offset(self.global_mempool.realsize) as *mut u32
+    }
+
+    unsafe fn increment_rc(&self) {
+        *self.rc() += 1;
+    }
+}
+
 impl<'a> Drop for Part<'a> {
     fn drop(&mut self) {
         unsafe {
-            let refcount = self.parent_slice.offset(self.global_mempool.realsize) as *mut u32;
-            if *refcount == 1 {
+            let rc = self.rc();
+            if *rc == 1 {
                 self.global_mempool.reclaim(self.parent_slice);
             }
-            *refcount -= 1;
+            *rc -= 1;
         }
     }
 }
@@ -71,6 +84,84 @@ impl<'a> DerefMut for Part<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { std::slice::from_raw_parts_mut(self.data.ptr, self.data.len) }
     }
+}
+
+impl <'a> AsRef<[u8]> for Part<'a> {
+    fn as_ref(&self) -> &[u8] {
+        self
+    }
+}
+
+impl <'a> AsMut<[u8]> for Part<'a> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self
+    }
+}
+
+impl <'a> bytes::Buf for Part<'a> {
+    fn remaining(&self) -> usize {
+        self.data.len
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        // As recommended by the implementation, this will panic if cnt > data.len
+        // Thanks rust!
+        self.data.len -= cnt;
+
+        unsafe {
+            self.data.ptr = self.data.ptr.add(cnt);
+        }
+    }
+
+    fn bytes(&self) -> &[u8] {
+        self
+    }
+}
+
+impl <'a> bytes::BufMut for Part<'a> {
+    fn remaining_mut(&self) -> usize {
+        self.data.len
+    }
+
+    unsafe fn advance_mut(&mut self, cnt: usize) {
+        // As recommended by the implementation, this will panic if cnt > data.len
+        // Thanks rust!
+        self.data.len -= cnt;
+
+        self.data.ptr = self.data.ptr.add(cnt);
+    }
+
+    fn bytes_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        unsafe { std::slice::from_raw_parts_mut(self.data.ptr as *mut MaybeUninit<u8>, self.data.len) }
+    }
+
+}
+
+impl <'a> DirectBuf for Part<'a> {
+    fn split_to(&mut self, at: usize) -> Self {
+        let old_ptr = self.data.ptr;
+        
+        // Rust will guard this operation from overflowing, protecting the unsafe below.
+        self.data.len -= at;
+        unsafe {
+            self.data.ptr = self.data.ptr.add(at);
+            // Since we are brining another part into the world, make sure we count it.
+            self.increment_rc();
+        }
+
+        Part {
+            global_mempool: self.global_mempool,
+            parent_slice: self.parent_slice,
+            data: Slice {
+                ptr: old_ptr,
+                len: at,
+            }
+        }
+    }
+}
+
+impl <'a> DirectBufMut for Part<'a> {
+    
 }
 
 pub struct TLMemPool {

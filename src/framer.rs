@@ -15,21 +15,19 @@
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use ::bytes::Bytes;
-
 use std::collections::VecDeque;
 
 use super::cursor;
 use super::parser;
 
 #[derive(Debug)]
-pub struct Frame {
-    packet: cursor::Multibytes,
+pub struct Frame<T: cursor::DirectBuf> {
+    packet: cursor::Multibytes<T>,
     data_start: cursor::Cursor,
 }
 
-pub struct FrameIter<'a> {
-    framer: &'a mut Framer,
+pub struct FrameIter<'a, T: cursor::DirectBuf> {
+    framer: &'a mut Framer<T>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -44,8 +42,8 @@ pub enum FrameError {
     DecodeError,
 }
 
-impl<'a> FrameIter<'a> {
-    pub fn next(&mut self) -> Result<Frame, FrameError> {
+impl<'a, T: cursor::DirectBuf> FrameIter<'a, T> {
+    pub fn next(&mut self) -> Result<Frame<T>, FrameError> {
         match &mut self.framer.state {
             FramerState::WaitingForHeader => {
                 // Attempt to decode a header
@@ -64,7 +62,7 @@ impl<'a> FrameIter<'a> {
                         // frame
                         if valid {
                             return Ok(Frame {
-                                packet: self.framer.ring.partition_before(&data_end),
+                                packet: self.framer.ring.split_to(&data_end),
                                 // This cursor is still valid - it will always be less than
                                 // data_end
                                 data_start: data_start,
@@ -103,7 +101,7 @@ impl<'a> FrameIter<'a> {
                 let valid = state.data_end.true_up(&self.framer.ring);
                 if valid {
                     let f = Frame {
-                        packet: self.framer.ring.partition_before(&state.data_end),
+                        packet: self.framer.ring.split_to(&state.data_end),
                         // This cursor is still valid - it will always be less than
                         // data_end
                         data_start: state.data_start,
@@ -131,14 +129,14 @@ enum FramerState {
     WaitingForTailingData(TailingDataState),
 }
 
-pub struct Framer {
+pub struct Framer<T: cursor::DirectBuf> {
     pub max_frame_size: usize,
-    ring: cursor::Multibytes,
+    ring: cursor::Multibytes<T>,
     state: FramerState,
 }
 
-impl Framer {
-    pub fn new(max_frame_size: usize, buffer_size: usize) -> Framer {
+impl <T: cursor::DirectBuf> Framer<T> {
+    pub fn new(max_frame_size: usize, buffer_size: usize) -> Self {
         Framer {
             max_frame_size,
             ring: cursor::Multibytes::new(VecDeque::with_capacity(buffer_size)),
@@ -146,7 +144,7 @@ impl Framer {
         }
     }
 
-    pub fn frame<'a>(&'a mut self, b: Bytes) -> FrameIter<'a> {
+    pub fn frame<'a>(&'a mut self, b: T) -> FrameIter<'a, T> {
         self.ring.append(b);
         FrameIter { framer: self }
     }
@@ -155,9 +153,6 @@ impl Framer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::BytesMut;
-
-    use std::cell::Cell;
     use std::iter::FromIterator;
 
     macro_rules! to_buf {
