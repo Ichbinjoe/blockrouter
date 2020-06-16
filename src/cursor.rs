@@ -21,9 +21,14 @@ use std::io::IoSlice;
 
 pub trait DirectBuf: bytes::Buf + std::convert::AsRef<[u8]> {
     fn split_to(&mut self, at: usize) -> Self;
+    fn truncate(&mut self, len: usize);
 }
 
 impl DirectBuf for Bytes {
+    fn truncate(&mut self, len: usize) {
+        self.truncate(len)
+    }
+
     fn split_to(&mut self, at: usize) -> Self {
         self.split_to(at)
     }
@@ -32,6 +37,10 @@ impl DirectBuf for Bytes {
 pub trait DirectBufMut: bytes::BufMut + DirectBuf + std::convert::AsMut<[u8]>{}
 
 impl DirectBuf for BytesMut {
+    fn truncate(&mut self, len: usize) {
+        self.truncate(len)
+    }
+
     fn split_to(&mut self, at: usize) -> Self {
         self.split_to(at)
     }
@@ -51,7 +60,7 @@ impl SliceCursor for BytesMut {}
 
 #[derive(Debug)]
 pub struct Multibytes<T: DirectBuf> {
-    b: VecDeque<T>,
+    pub(crate) b: VecDeque<T>,
 }
 
 #[derive(Clone, Copy, Debug, PartialOrd, PartialEq)]

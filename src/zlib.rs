@@ -14,6 +14,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+#![feature(new_uninit)]
 
 extern crate libc;
 use libc::*;
@@ -42,11 +43,13 @@ pub struct ZStream {
 
     opaque: *mut c_void,
 
+    data_type: c_int,
+
     pub adler: c_ulong,
     reserved: c_ulong,
 }
 
-#[link(name = "zlib", kind = "static")]
+#[link(name = "z", kind = "static")]
 extern "C" {
     fn deflateInit_(
         strm: *mut ZStream,
@@ -66,6 +69,7 @@ extern "C" {
 }
 
 #[repr(i32)]
+#[derive(Debug)]
 pub enum ZLibError {
     Errno = -1,
     StreamError = -2,
@@ -74,7 +78,6 @@ pub enum ZLibError {
     BufError = -5,
     VersionError = -6,
 }
-
 impl ZLibError {
     fn lookup(i: i32) -> Option<ZLibError> {
         match i {
@@ -100,14 +103,21 @@ pub enum FlushMode {
     Trees = 6,
 }
 
+pub trait ZlibOperator {
+    fn reset(&mut self);
+    fn process(&mut self, flush: FlushMode) -> Option<ZLibError>;
+    fn strm(&self) -> &ZStream;
+    fn strm_mut(&mut self) -> &mut ZStream;
+}
+
 pub struct Inflate {
-    pub strm: ZStream,
+    pub strm: Box<ZStream>,
 }
 
 impl Drop for Inflate {
     fn drop(&mut self) {
         unsafe {
-            inflateEnd(&mut self.strm);
+            inflateEnd(self.strm.as_mut());
         }
     }
 }
@@ -115,12 +125,12 @@ impl Drop for Inflate {
 impl Inflate {
     pub fn new() -> Result<Inflate, ZLibError> {
         let mut i = Inflate {
-            strm: unsafe { MaybeUninit::zeroed().assume_init() },
+            strm: unsafe {Box::<ZStream>::new_zeroed().assume_init()},
         };
 
         let errno = unsafe {
             inflateInit_(
-                &mut i.strm,
+                i.strm.as_mut(),
                 ZLIB_MAJ_VERSION.as_ptr() as *const i8,
                 size_of::<ZStream>() as i32,
             )
@@ -132,24 +142,34 @@ impl Inflate {
 
         Ok(i)
     }
+}
 
-    pub fn reset(&mut self) {
-        unsafe { inflateReset(&mut self.strm) }
+impl ZlibOperator for Inflate {
+    fn reset(&mut self) {
+        unsafe { inflateReset(self.strm.as_mut()) }
     }
     
-    pub fn process(&mut self, flush: FlushMode) -> Option<ZLibError> {
-        ZLibError::lookup(unsafe { inflate(&mut self.strm, flush as i32) })
+    fn process(&mut self, flush: FlushMode) -> Option<ZLibError> {
+        ZLibError::lookup(unsafe { inflate(self.strm.as_mut(), flush as i32) })
+    }
+
+    fn strm(&self) -> &ZStream {
+        &self.strm
+    }
+    
+    fn strm_mut(&mut self) -> &mut ZStream {
+        &mut self.strm
     }
 }
 
 pub struct Deflate {
-    pub strm: ZStream,
+    pub strm: Box<ZStream>,
 }
 
 impl Drop for Deflate {
     fn drop(&mut self) {
         unsafe {
-            deflateEnd(&mut self.strm);
+            deflateEnd(self.strm.as_mut());
         }
     }
 }
@@ -157,12 +177,12 @@ impl Drop for Deflate {
 impl Deflate {
     pub fn new(level: i32) -> Result<Deflate, ZLibError> {
         let mut i = Deflate {
-            strm: unsafe { MaybeUninit::zeroed().assume_init() },
+            strm: unsafe { Box::new_zeroed().assume_init() }
         };
 
         let errno = unsafe {
             deflateInit_(
-                &mut i.strm,
+                i.strm.as_mut(),
                 level,
                 ZLIB_MAJ_VERSION.as_ptr() as *const i8,
                 size_of::<ZStream>() as i32,
@@ -175,12 +195,22 @@ impl Deflate {
 
         Ok(i)
     }
+}
 
-    pub fn reset(&mut self) {
-        unsafe { deflateReset(&mut self.strm) }
+impl ZlibOperator for Deflate {
+    fn reset(&mut self) {
+        unsafe { deflateReset(self.strm.as_mut()) }
     }
 
-    pub fn process(&mut self, flush: FlushMode) -> Option<ZLibError> {
-        ZLibError::lookup(unsafe { deflate(&mut self.strm, flush as i32) })
+    fn process(&mut self, flush: FlushMode) -> Option<ZLibError> {
+        ZLibError::lookup(unsafe { deflate(self.strm.as_mut(), flush as i32) })
+    }
+
+    fn strm(&self) -> &ZStream {
+        &self.strm
+    }
+    
+    fn strm_mut(&mut self) -> &mut ZStream {
+        &mut self.strm
     }
 }

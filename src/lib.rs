@@ -16,15 +16,19 @@
  */
 
 #![feature(test)]
+#![feature(new_uninit)]
 
 extern crate bytes;
 extern crate nom;
 
+#[macro_use]
+pub mod mempool;
+
+pub mod compress;
 pub mod crypto;
 pub mod cursor;
 pub mod framer;
 pub mod mbedtls;
-pub mod mempool;
 pub mod parser;
 pub mod zlib;
 

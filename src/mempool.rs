@@ -44,7 +44,6 @@ struct Slice {
     len: usize,
 }
 
-#[derive(Clone)]
 pub struct Part<'a> {
     global_mempool: &'a GlobalMemPool,
     parent_slice: *mut u8,
@@ -138,6 +137,14 @@ impl <'a> bytes::BufMut for Part<'a> {
 }
 
 impl <'a> DirectBuf for Part<'a> {
+    fn truncate(&mut self, len: usize) {
+        if len > self.data.len {
+            panic!("truncate len > len");
+        }
+
+        self.data.len = len;
+    }
+
     fn split_to(&mut self, at: usize) -> Self {
         let old_ptr = self.data.ptr;
         
@@ -165,7 +172,11 @@ impl <'a> DirectBufMut for Part<'a> {
 }
 
 pub struct TLMemPool {
-    cache: Vec<*mut u8>,
+    pub cache: Vec<*mut u8>,
+}
+
+pub trait BlockAllocator<'a, T> {
+    fn allocate(&'a self) -> T;
 }
 
 pub struct GlobalMemPool {
@@ -178,8 +189,7 @@ pub struct GlobalMemPool {
 
 impl GlobalMemPool {
     /// Creates a new GlobalMemPool with the given settings
-    /// Why is this unsafe? This function is _NOT_ reentrant, and will do bad things
-    pub unsafe fn new(
+    pub fn new(
         global_tlmp_ref: &'static std::thread::LocalKey<RefCell<TLMemPool>>,
         settings: GlobalMemPoolSettings,
     ) -> GlobalMemPool {
@@ -187,7 +197,7 @@ impl GlobalMemPool {
             memory: SegQueue::new(),
             lk: global_tlmp_ref,
             allocs: AtomicU64::new(0),
-            realsize: 1 << settings.buf_size - std::mem::size_of::<u32>(),
+            realsize: ((1 << settings.buf_size) - std::mem::size_of::<u32>()) as isize,
             settings,
         }
     }
@@ -208,29 +218,6 @@ impl GlobalMemPool {
         });
     }
 
-    /// Allocates a new Part
-    pub fn allocate(&self) -> Part {
-        let slice = self
-            .lk
-            .with(|tlmp| unsafe { (*tlmp.as_ptr()).cache.pop() })
-            .unwrap_or_else(|| self.allocate_global());
-
-        // There is a special sentienl at the tail end of every slice which acts as
-        // the refcount value
-        unsafe {
-            let refcount_ptr = slice.offset(self.realsize as isize) as *mut u32;
-            *refcount_ptr = 1;
-        }
-        
-        Part{
-            global_mempool: self,
-            parent_slice: slice,
-            data: Slice {
-                ptr: slice,
-                len: self.realsize as usize,
-            },
-        }
-    }
 
     fn allocate_global(&self) -> *mut u8 {
         let backoff = Backoff::new();
@@ -282,10 +269,37 @@ impl GlobalMemPool {
     }
 }
 
+impl <'a> BlockAllocator<'a, Part<'a>> for GlobalMemPool {
+    /// Allocates a new Part
+    fn allocate(&self) -> Part {
+        let slice = self
+            .lk
+            .with(|tlmp| unsafe { (*tlmp.as_ptr()).cache.pop() })
+            .unwrap_or_else(|| self.allocate_global());
+
+        // There is a special sentienl at the tail end of every slice which acts as
+        // the refcount value
+        unsafe {
+            let refcount_ptr = slice.offset(self.realsize as isize) as *mut u32;
+            *refcount_ptr = 1;
+        }
+        
+        Part{
+            global_mempool: self,
+            parent_slice: slice,
+            data: Slice {
+                ptr: slice,
+                len: self.realsize as usize,
+            },
+        }
+    }
+}
+
+#[macro_use]
 macro_rules! global_mempool_tlmp {
     ($label: ident, $cap: expr) => {
         thread_local! {
-            static $label: RefCell<TLMemPool> = RefCell::new(TLMemPool{cache: Vec::with_capacity($cap)});
+            static $label: std::cell::RefCell<crate::mempool::TLMemPool> = std::cell::RefCell::new(crate::mempool::TLMemPool{cache: Vec::with_capacity($cap)});
         }
     };
 }
