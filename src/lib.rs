@@ -26,6 +26,7 @@ pub mod framer;
 pub mod mbedtls;
 pub mod mempool;
 pub mod parser;
+pub mod zlib;
 
 #[cfg(test)]
 mod tests {
