@@ -123,7 +123,7 @@ pub mod tests {
     use bytes::Buf;
     use crate::mempool::BlockAllocator;
     
-    global_mempool_tlmp!(bidirectional_smoke_test_tlmp, 1);
+    global_mempool_tlmp!(bidirectional_smoke_test_tlmp, 16);
 
     #[test]
     fn bidirectional_smoke_test() {
@@ -152,5 +152,36 @@ pub mod tests {
         for i in 0..252 {
             assert_eq!(i % 16 as u8, v.get_u8());
         }
+    }
+  
+    extern crate test;
+    use test::Bencher;
+    global_mempool_tlmp!(bench_deflate_inflate_cycle_tlmp, 16);
+    #[bench]
+    fn bench_deflate_inflate_cycle(b: &mut Bencher) {
+        let alloc = mempool::GlobalMemPool::new(&bench_deflate_inflate_cycle_tlmp, mempool::GlobalMemPoolSettings{
+            buf_size: 8,
+            page_entries: 128,
+            concurrent_allocation_limit: 1,
+        });
+
+        let mut deflate = MbZlibOp::deflate(1, &alloc).expect("could not init deflate");
+        let mut inflate = MbZlibOp::inflate(&alloc).expect("could not init inflate");
+
+        let mut buffer = alloc.allocate();
+        for i in 0..buffer.remaining() {
+            buffer[i] = (i % 16) as u8;
+        }
+
+        let mut vd = VecDeque::new();
+        vd.push_back(buffer);
+        let mut mb = Some(cursor::Multibytes::new(vd));
+        // There has to be a better way to do this...
+        b.iter(|| {
+            for _i in 0..1000 {
+                let compressed = deflate.process(mb.take().unwrap()).expect("could not deflate");
+                mb = Some(inflate.process(compressed).expect("could not inflate"));
+            }
+        });
     }
 }
