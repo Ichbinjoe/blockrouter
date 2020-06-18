@@ -135,7 +135,7 @@ pub struct Framer<T: cursor::DirectBuf> {
     state: FramerState,
 }
 
-impl <T: cursor::DirectBuf> Framer<T> {
+impl<T: cursor::DirectBuf> Framer<T> {
     pub fn new(max_frame_size: usize, buffer_size: usize) -> Self {
         Framer {
             max_frame_size,

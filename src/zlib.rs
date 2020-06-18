@@ -125,7 +125,7 @@ impl Drop for Inflate {
 impl Inflate {
     pub fn new() -> Result<Inflate, ZLibError> {
         let mut i = Inflate {
-            strm: unsafe {Box::<ZStream>::new_zeroed().assume_init()},
+            strm: unsafe { Box::<ZStream>::new_zeroed().assume_init() },
         };
 
         let errno = unsafe {
@@ -148,7 +148,7 @@ impl ZlibOperator for Inflate {
     fn reset(&mut self) {
         unsafe { inflateReset(self.strm.as_mut()) }
     }
-    
+
     fn process(&mut self, flush: FlushMode) -> Option<ZLibError> {
         ZLibError::lookup(unsafe { inflate(self.strm.as_mut(), flush as i32) })
     }
@@ -156,7 +156,7 @@ impl ZlibOperator for Inflate {
     fn strm(&self) -> &ZStream {
         &self.strm
     }
-    
+
     fn strm_mut(&mut self) -> &mut ZStream {
         &mut self.strm
     }
@@ -177,7 +177,7 @@ impl Drop for Deflate {
 impl Deflate {
     pub fn new(level: i32) -> Result<Deflate, ZLibError> {
         let mut i = Deflate {
-            strm: unsafe { Box::new_zeroed().assume_init() }
+            strm: unsafe { Box::new_zeroed().assume_init() },
         };
 
         let errno = unsafe {
@@ -209,7 +209,7 @@ impl ZlibOperator for Deflate {
     fn strm(&self) -> &ZStream {
         &self.strm
     }
-    
+
     fn strm_mut(&mut self) -> &mut ZStream {
         &mut self.strm
     }

@@ -34,7 +34,7 @@ impl DirectBuf for Bytes {
     }
 }
 
-pub trait DirectBufMut: bytes::BufMut + DirectBuf + std::convert::AsMut<[u8]>{}
+pub trait DirectBufMut: bytes::BufMut + DirectBuf + std::convert::AsMut<[u8]> {}
 
 impl DirectBuf for BytesMut {
     fn truncate(&mut self, len: usize) {
@@ -145,7 +145,6 @@ impl Cursor {
             if item.remaining() == 0 {
                 continue;
             }
-
 
             dst[i] = IoSlice::new(&item.as_ref()[..]);
             i += 1;

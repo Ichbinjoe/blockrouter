@@ -23,16 +23,23 @@ use std::collections::VecDeque;
 
 use bytes::Buf;
 
-pub struct MbZlibOp<'g, Op: zlib::ZlibOperator, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>> {
+pub struct MbZlibOp<
+    'g,
+    Op: zlib::ZlibOperator,
+    T: cursor::DirectBufMut,
+    Allocator: mempool::BlockAllocator<'g, T>,
+> {
     z: Op,
     allocator: &'g Allocator,
     pd: std::marker::PhantomData<T>,
 }
 
-impl <'g, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>> MbZlibOp<'g, zlib::Deflate, T, Allocator> {
+impl<'g, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>>
+    MbZlibOp<'g, zlib::Deflate, T, Allocator>
+{
     pub fn deflate(level: i32, allocator: &'g Allocator) -> Result<Self, zlib::ZLibError> {
         let deflate = zlib::Deflate::new(level)?;
-        Ok(MbZlibOp{
+        Ok(MbZlibOp {
             z: deflate,
             allocator,
             pd: std::marker::PhantomData,
@@ -40,10 +47,12 @@ impl <'g, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>> Mb
     }
 }
 
-impl <'g, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>> MbZlibOp<'g, zlib::Inflate, T, Allocator> {
+impl<'g, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>>
+    MbZlibOp<'g, zlib::Inflate, T, Allocator>
+{
     pub fn inflate(allocator: &'g Allocator) -> Result<Self, zlib::ZLibError> {
         let inflate = zlib::Inflate::new()?;
-        Ok(MbZlibOp{
+        Ok(MbZlibOp {
             z: inflate,
             allocator,
             pd: std::marker::PhantomData,
@@ -51,8 +60,13 @@ impl <'g, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>> Mb
     }
 }
 
-impl <'g, Op: zlib::ZlibOperator, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>> MbZlibOp<'g, Op, T, Allocator> {
-
+impl<
+        'g,
+        Op: zlib::ZlibOperator,
+        T: cursor::DirectBufMut,
+        Allocator: mempool::BlockAllocator<'g, T>,
+    > MbZlibOp<'g, Op, T, Allocator>
+{
     unsafe fn set_in(&mut self, buf: &T) {
         let b = buf.bytes();
         self.z.strm_mut().next_in = b.as_ptr().clone();
@@ -65,10 +79,13 @@ impl <'g, Op: zlib::ZlibOperator, T: cursor::DirectBufMut, Allocator: mempool::B
         self.z.strm_mut().avail_out = b.len() as u32;
     }
 
-    pub fn process(&mut self, mut b: cursor::Multibytes<T>) -> Result<cursor::Multibytes<T>, zlib::ZLibError> {
+    pub fn process(
+        &mut self,
+        mut b: cursor::Multibytes<T>,
+    ) -> Result<cursor::Multibytes<T>, zlib::ZLibError> {
         let mut buf_in = match b.b.pop_front() {
             Some(x) => x,
-            None => {return Ok(b)} // Nothing to do, abort!
+            None => return Ok(b), // Nothing to do, abort!
         };
 
         let mut buf_out = self.allocator.allocate();
@@ -92,15 +109,19 @@ impl <'g, Op: zlib::ZlibOperator, T: cursor::DirectBufMut, Allocator: mempool::B
                 // Try to pop again
                 if let Some(new_buf_in) = b.b.pop_front() {
                     buf_in = new_buf_in;
-                    unsafe { self.set_in(&buf_in); }
+                    unsafe {
+                        self.set_in(&buf_in);
+                    }
                 } else {
-                    break
+                    break;
                 }
             }
 
             if self.z.strm().avail_out == 0 {
                 let old_buf = std::mem::replace(&mut buf_out, self.allocator.allocate());
-                unsafe { self.set_out(&mut buf_out); }
+                unsafe {
+                    self.set_out(&mut buf_out);
+                }
 
                 vd.push_back(old_buf);
             }
@@ -120,18 +141,21 @@ impl <'g, Op: zlib::ZlibOperator, T: cursor::DirectBufMut, Allocator: mempool::B
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use bytes::Buf;
     use crate::mempool::BlockAllocator;
-    
+    use bytes::Buf;
+
     global_mempool_tlmp!(bidirectional_smoke_test_tlmp, 16);
 
     #[test]
     fn bidirectional_smoke_test() {
-        let alloc = mempool::GlobalMemPool::new(&bidirectional_smoke_test_tlmp, mempool::GlobalMemPoolSettings{
-            buf_size: 8,
-            page_entries: 128,
-            concurrent_allocation_limit: 1,
-        });
+        let alloc = mempool::GlobalMemPool::new(
+            &bidirectional_smoke_test_tlmp,
+            mempool::GlobalMemPoolSettings {
+                buf_size: 8,
+                page_entries: 128,
+                concurrent_allocation_limit: 1,
+            },
+        );
 
         let mut deflate = MbZlibOp::deflate(5, &alloc).expect("could not init deflate");
         let mut inflate = MbZlibOp::inflate(&alloc).expect("could not init inflate");
@@ -153,17 +177,20 @@ pub mod tests {
             assert_eq!(i % 16 as u8, v.get_u8());
         }
     }
-  
+
     extern crate test;
     use test::Bencher;
     global_mempool_tlmp!(bench_deflate_inflate_cycle_tlmp, 16);
     #[bench]
     fn bench_deflate_inflate_cycle(b: &mut Bencher) {
-        let alloc = mempool::GlobalMemPool::new(&bench_deflate_inflate_cycle_tlmp, mempool::GlobalMemPoolSettings{
-            buf_size: 8,
-            page_entries: 128,
-            concurrent_allocation_limit: 1,
-        });
+        let alloc = mempool::GlobalMemPool::new(
+            &bench_deflate_inflate_cycle_tlmp,
+            mempool::GlobalMemPoolSettings {
+                buf_size: 8,
+                page_entries: 128,
+                concurrent_allocation_limit: 1,
+            },
+        );
 
         let mut deflate = MbZlibOp::deflate(1, &alloc).expect("could not init deflate");
         let mut inflate = MbZlibOp::inflate(&alloc).expect("could not init inflate");
@@ -179,7 +206,9 @@ pub mod tests {
         // There has to be a better way to do this...
         b.iter(|| {
             for _i in 0..1000 {
-                let compressed = deflate.process(mb.take().unwrap()).expect("could not deflate");
+                let compressed = deflate
+                    .process(mb.take().unwrap())
+                    .expect("could not deflate");
                 mb = Some(inflate.process(compressed).expect("could not inflate"));
             }
         });

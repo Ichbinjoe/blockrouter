@@ -18,10 +18,10 @@ extern crate crossbeam_queue;
 extern crate crossbeam_utils;
 extern crate memmap;
 
+use core::mem::MaybeUninit;
 use crossbeam_queue::SegQueue;
 use crossbeam_utils::Backoff;
 use std::cell::RefCell;
-use core::mem::MaybeUninit;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,7 +50,7 @@ pub struct Part<'a> {
     data: Slice,
 }
 
-impl <'a> Part<'a> {
+impl<'a> Part<'a> {
     unsafe fn rc(&self) -> *mut u32 {
         self.parent_slice.offset(self.global_mempool.realsize) as *mut u32
     }
@@ -85,19 +85,19 @@ impl<'a> DerefMut for Part<'a> {
     }
 }
 
-impl <'a> AsRef<[u8]> for Part<'a> {
+impl<'a> AsRef<[u8]> for Part<'a> {
     fn as_ref(&self) -> &[u8] {
         self
     }
 }
 
-impl <'a> AsMut<[u8]> for Part<'a> {
+impl<'a> AsMut<[u8]> for Part<'a> {
     fn as_mut(&mut self) -> &mut [u8] {
         self
     }
 }
 
-impl <'a> bytes::Buf for Part<'a> {
+impl<'a> bytes::Buf for Part<'a> {
     fn remaining(&self) -> usize {
         self.data.len
     }
@@ -117,7 +117,7 @@ impl <'a> bytes::Buf for Part<'a> {
     }
 }
 
-impl <'a> bytes::BufMut for Part<'a> {
+impl<'a> bytes::BufMut for Part<'a> {
     fn remaining_mut(&self) -> usize {
         self.data.len
     }
@@ -131,12 +131,13 @@ impl <'a> bytes::BufMut for Part<'a> {
     }
 
     fn bytes_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        unsafe { std::slice::from_raw_parts_mut(self.data.ptr as *mut MaybeUninit<u8>, self.data.len) }
+        unsafe {
+            std::slice::from_raw_parts_mut(self.data.ptr as *mut MaybeUninit<u8>, self.data.len)
+        }
     }
-
 }
 
-impl <'a> DirectBuf for Part<'a> {
+impl<'a> DirectBuf for Part<'a> {
     fn truncate(&mut self, len: usize) {
         if len > self.data.len {
             panic!("truncate len > len");
@@ -147,7 +148,7 @@ impl <'a> DirectBuf for Part<'a> {
 
     fn split_to(&mut self, at: usize) -> Self {
         let old_ptr = self.data.ptr;
-        
+
         // Rust will guard this operation from overflowing, protecting the unsafe below.
         self.data.len -= at;
         unsafe {
@@ -162,14 +163,12 @@ impl <'a> DirectBuf for Part<'a> {
             data: Slice {
                 ptr: old_ptr,
                 len: at,
-            }
+            },
         }
     }
 }
 
-impl <'a> DirectBufMut for Part<'a> {
-    
-}
+impl<'a> DirectBufMut for Part<'a> {}
 
 pub struct TLMemPool {
     pub cache: Vec<*mut u8>,
@@ -218,7 +217,6 @@ impl GlobalMemPool {
         });
     }
 
-
     fn allocate_global(&self) -> *mut u8 {
         let backoff = Backoff::new();
         loop {
@@ -236,9 +234,7 @@ impl GlobalMemPool {
                         )
                         .unwrap();
 
-                        let page = Box::into_raw(Box::new(Page {
-                            m: mm,
-                        }));
+                        let page = Box::into_raw(Box::new(Page { m: mm }));
 
                         // Now you may asking, woah there cowboy. Thats some pretty unsafe bullshit
                         // you are pulling here. And I would agree. Unfortuantely the rust compiler
@@ -269,7 +265,7 @@ impl GlobalMemPool {
     }
 }
 
-impl <'a> BlockAllocator<'a, Part<'a>> for GlobalMemPool {
+impl<'a> BlockAllocator<'a, Part<'a>> for GlobalMemPool {
     /// Allocates a new Part
     fn allocate(&self) -> Part {
         let slice = self
@@ -283,8 +279,8 @@ impl <'a> BlockAllocator<'a, Part<'a>> for GlobalMemPool {
             let refcount_ptr = slice.offset(self.realsize as isize) as *mut u32;
             *refcount_ptr = 1;
         }
-        
-        Part{
+
+        Part {
             global_mempool: self,
             parent_slice: slice,
             data: Slice {
@@ -315,11 +311,14 @@ mod tests {
     #[test]
     fn smoke_test() {
         let allocator = unsafe {
-            GlobalMemPool::new(&smoke_test_pool, GlobalMemPoolSettings {
-                buf_size: 12,
-                concurrent_allocation_limit: 1,
-                page_entries: 64,
-            })
+            GlobalMemPool::new(
+                &smoke_test_pool,
+                GlobalMemPoolSettings {
+                    buf_size: 12,
+                    concurrent_allocation_limit: 1,
+                    page_entries: 64,
+                },
+            )
         };
 
         for i in 0..10000 {
@@ -332,11 +331,14 @@ mod tests {
     #[bench]
     fn bench_simple_tl_hot(b: &mut Bencher) {
         let allocator = unsafe {
-            GlobalMemPool::new(&bench_simple_tl_hot_pool, GlobalMemPoolSettings {
-                buf_size: 12,
-                concurrent_allocation_limit: 1,
-                page_entries: 64,
-            })
+            GlobalMemPool::new(
+                &bench_simple_tl_hot_pool,
+                GlobalMemPoolSettings {
+                    buf_size: 12,
+                    concurrent_allocation_limit: 1,
+                    page_entries: 64,
+                },
+            )
         };
 
         for _i in 0..10000 {
@@ -355,11 +357,14 @@ mod tests {
     #[bench]
     fn bench_simple_tl_cold(b: &mut Bencher) {
         let allocator = unsafe {
-            GlobalMemPool::new(&bench_simple_tl_cold_pool, GlobalMemPoolSettings {
-                buf_size: 12,
-                concurrent_allocation_limit: 1,
-                page_entries: 64,
-            })
+            GlobalMemPool::new(
+                &bench_simple_tl_cold_pool,
+                GlobalMemPoolSettings {
+                    buf_size: 12,
+                    concurrent_allocation_limit: 1,
+                    page_entries: 64,
+                },
+            )
         };
         for _i in 0..10000 {
             let buffer = GlobalMemPool::allocate(&allocator);
