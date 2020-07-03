@@ -198,7 +198,7 @@ mod tests {
     fn packetinflater_normal_compression() {
         let alloc = mempool::SystemMemPool { buf_size: 12 };
         let mut inflater = PacketInflater::new();
-        inflater.start_compression(64).unwrap();
+        inflater.start_compression(3).unwrap();
 
         // lol this isn't efficient
         let frame = frame_of(vec![0x4, 120, 156, 99, 100, 98, 102, 1, 0, 0, 24, 0, 11]);
