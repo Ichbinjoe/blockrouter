@@ -16,22 +16,16 @@
  */
 
 use super::cursor;
-use super::mempool;
-use core::task::Poll;
-use std::collections::VecDeque;
-use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
-use tokio::io::Result;
-use tokio::net::tcp::ReadHalf;
+use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::prelude::*;
-use tokio::runtime::Runtime;
 
-trait BufferSource<T: cursor::DirectBufMut> {
+pub trait BufferSource<T: cursor::DirectBufMut> {
     fn singlebuffer(&self) -> T;
     //fn buffers(n: usize, vec: &mut VecDeque<T>);
 }
 
-struct ConnectionSource<'a> {
+pub struct ConnectionSource<'a> {
     rh: ReadHalf<'a>,
 }
 
@@ -41,7 +35,7 @@ pub enum ReadResult<T: cursor::DirectBufMut> {
 }
 
 impl<'a> ConnectionSource<'a> {
-    async fn read<T: cursor::DirectBufMut, BS: BufferSource<T>>(
+    pub async fn read<T: cursor::DirectBufMut, BS: BufferSource<T>>(
         &mut self,
         alloc: &BS,
     ) -> io::Result<ReadResult<T>> {
@@ -56,5 +50,18 @@ impl<'a> ConnectionSource<'a> {
             buf.truncate(amount_read);
             Ok(ReadResult::Data(buf))
         }
+    }
+}
+
+pub struct ConnectionSink<'a> {
+    wh: WriteHalf<'a>,
+}
+
+impl<'a> ConnectionSink<'a> {
+    pub async fn write<T: bytes::Buf>(&mut self, mut buf: T) -> io::Result<()> {
+        while buf.has_remaining() {
+            self.wh.write_buf(&mut buf).await?;
+        }
+        Ok(())
     }
 }
