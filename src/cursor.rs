@@ -34,7 +34,9 @@ impl DirectBuf for Bytes {
     }
 }
 
-pub trait DirectBufMut: bytes::BufMut + DirectBuf + std::convert::AsMut<[u8]> {}
+pub trait DirectBufMut: bytes::BufMut + DirectBuf + std::convert::AsMut<[u8]> {
+    unsafe fn bytes_mut_assume_init(&mut self) -> &mut [u8];
+}
 
 impl DirectBuf for BytesMut {
     fn truncate(&mut self, len: usize) {
@@ -46,7 +48,7 @@ impl DirectBuf for BytesMut {
     }
 }
 
-pub trait SliceCursor: bytes::Buf + Clone {
+pub trait SliceCursor: bytes::Buf {
     fn has_atleast(&self, len: usize) -> bool {
         self.remaining() >= len
     }
@@ -244,11 +246,64 @@ impl<T: DirectBuf> Multibytes<T> {
             c: self.cursor(),
         }
     }
-}
-/*
-impl<T: DirectBuf> Multibytes<T> {
 
-}*/
+    pub fn cursor_view<'a>(&'a self, c: Cursor) -> MultibytesView<'a, T> {
+        MultibytesView { b: self, c }
+    }
+
+    pub fn indexed<'a>(self) -> IndexedMultibytes<T> {
+        IndexedMultibytes {
+            b: self,
+            c: Cursor { of: 0, i: 0 },
+        }
+    }
+
+    pub fn cursor_indexed<'a>(self, c: Cursor) -> IndexedMultibytes<T> {
+        IndexedMultibytes { b: self, c }
+    }
+}
+
+pub struct IndexedMultibytes<T: DirectBuf> {
+    b: Multibytes<T>,
+    c: Cursor,
+}
+
+impl<T: DirectBuf> Buf for IndexedMultibytes<T> {
+    fn remaining(&self) -> usize {
+        self.c.remaining(&self.b)
+    }
+
+    fn bytes(&self) -> &[u8] {
+        match self.b.b.get(self.c.of) {
+            Some(x) => &x.bytes()[self.c.i..],
+            None => &[],
+        }
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        self.c.advance(&self.b, cnt);
+    }
+
+    fn bytes_vectored<'b>(&'b self, dst: &mut [IoSlice<'b>]) -> usize {
+        self.c.bytes_vectored(&self.b, dst)
+    }
+}
+
+impl<T: DirectBuf> SliceCursor for IndexedMultibytes<T> {
+    fn has_atleast(&self, len: usize) -> bool {
+        self.c.has_atleast(&self.b, len)
+    }
+}
+
+impl<T: DirectBuf> IndexedMultibytes<T> {
+    pub fn cursor(&self) -> Cursor {
+        self.c
+    }
+
+    pub fn dissolve(self) -> (Multibytes<T>, Cursor) {
+        (self.b, self.c)
+    }
+}
 
 pub struct MultibytesView<'a, T: DirectBuf> {
     b: &'a Multibytes<T>,

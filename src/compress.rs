@@ -23,72 +23,51 @@ use std::collections::VecDeque;
 
 use bytes::Buf;
 
-pub struct MbZlibOp<
-    'g,
-    Op: zlib::ZlibOperator,
-    T: cursor::DirectBufMut,
-    Allocator: mempool::BlockAllocator<'g, T>,
-> {
+pub struct MbZlibOp<Op: zlib::ZlibOperator> {
     z: Op,
-    allocator: &'g Allocator,
-    pd: std::marker::PhantomData<T>,
 }
 
-impl<'g, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>>
-    MbZlibOp<'g, zlib::Deflate, T, Allocator>
-{
-    pub fn deflate(level: i32, allocator: &'g Allocator) -> Result<Self, zlib::ZLibError> {
+pub type Inflater = MbZlibOp<zlib::Inflate>;
+pub type Deflater = MbZlibOp<zlib::Deflate>;
+
+impl MbZlibOp<zlib::Deflate> {
+    pub fn deflate(level: i32) -> Result<Self, zlib::ZLibError> {
         let deflate = zlib::Deflate::new(level)?;
-        Ok(MbZlibOp {
-            z: deflate,
-            allocator,
-            pd: std::marker::PhantomData,
-        })
+        Ok(MbZlibOp { z: deflate })
     }
 }
 
-impl<'g, T: cursor::DirectBufMut, Allocator: mempool::BlockAllocator<'g, T>>
-    MbZlibOp<'g, zlib::Inflate, T, Allocator>
-{
-    pub fn inflate(allocator: &'g Allocator) -> Result<Self, zlib::ZLibError> {
+impl MbZlibOp<zlib::Inflate> {
+    pub fn inflate() -> Result<Self, zlib::ZLibError> {
         let inflate = zlib::Inflate::new()?;
-        Ok(MbZlibOp {
-            z: inflate,
-            allocator,
-            pd: std::marker::PhantomData,
-        })
+        Ok(MbZlibOp { z: inflate })
     }
 }
 
-impl<
-        'g,
-        Op: zlib::ZlibOperator,
-        T: cursor::DirectBufMut,
-        Allocator: mempool::BlockAllocator<'g, T>,
-    > MbZlibOp<'g, Op, T, Allocator>
-{
-    unsafe fn set_in(&mut self, buf: &T) {
+impl<Op: zlib::ZlibOperator> MbZlibOp<Op> {
+    unsafe fn set_in<T: cursor::DirectBufMut>(&mut self, buf: &T) {
         let b = buf.bytes();
         self.z.strm_mut().next_in = b.as_ptr().clone();
         self.z.strm_mut().avail_in = b.len() as u32;
     }
 
-    unsafe fn set_out(&mut self, buf: &mut T) {
+    unsafe fn set_out<T: cursor::DirectBufMut>(&mut self, buf: &mut T) {
         let b = buf.bytes();
         self.z.strm_mut().next_out = b.as_ptr().clone() as *mut u8;
         self.z.strm_mut().avail_out = b.len() as u32;
     }
 
-    pub fn process(
+    pub fn process<'a, T: cursor::DirectBufMut, Alloc: mempool::BlockAllocator<'a, T>>(
         &mut self,
         mut b: cursor::Multibytes<T>,
+        alloc: &'a Alloc,
     ) -> Result<cursor::Multibytes<T>, zlib::ZLibError> {
         let mut buf_in = match b.b.pop_front() {
             Some(x) => x,
             None => return Ok(b), // Nothing to do, abort!
         };
 
-        let mut buf_out = self.allocator.allocate();
+        let mut buf_out = alloc.allocate();
 
         // Set up the zlib shit
         // This is unsafe because we need to keep the buffers in frame without dropping them while
@@ -118,7 +97,7 @@ impl<
             }
 
             if self.z.strm().avail_out == 0 {
-                let old_buf = std::mem::replace(&mut buf_out, self.allocator.allocate());
+                let old_buf = std::mem::replace(&mut buf_out, alloc.allocate());
                 unsafe {
                     self.set_out(&mut buf_out);
                 }
@@ -157,8 +136,8 @@ pub mod tests {
             },
         );
 
-        let mut deflate = MbZlibOp::deflate(5, &alloc).expect("could not init deflate");
-        let mut inflate = MbZlibOp::inflate(&alloc).expect("could not init inflate");
+        let mut deflate = MbZlibOp::deflate(5).expect("could not init deflate");
+        let mut inflate = MbZlibOp::inflate().expect("could not init inflate");
 
         let mut buffer = alloc.allocate();
         for i in 0..buffer.remaining() {
@@ -169,9 +148,11 @@ pub mod tests {
         vd.push_back(buffer);
         let mb = cursor::Multibytes::new(vd);
 
-        let compressed = deflate.process(mb).expect("could not deflate");
+        let compressed = deflate.process(mb, &alloc).expect("could not deflate");
         assert_eq!(28, compressed.cursor().remaining(&compressed));
-        let reinflated = inflate.process(compressed).expect("could not inflate");
+        let reinflated = inflate
+            .process(compressed, &alloc)
+            .expect("could not inflate");
         let mut v = reinflated.view();
         for i in 0..252 {
             assert_eq!(i % 16 as u8, v.get_u8());
@@ -192,8 +173,8 @@ pub mod tests {
             },
         );
 
-        let mut deflate = MbZlibOp::deflate(1, &alloc).expect("could not init deflate");
-        let mut inflate = MbZlibOp::inflate(&alloc).expect("could not init inflate");
+        let mut deflate = MbZlibOp::deflate(1).expect("could not init deflate");
+        let mut inflate = MbZlibOp::inflate().expect("could not init inflate");
 
         let mut buffer = alloc.allocate();
         for i in 0..buffer.remaining() {
@@ -207,9 +188,13 @@ pub mod tests {
         b.iter(|| {
             for _i in 0..1000 {
                 let compressed = deflate
-                    .process(mb.take().unwrap())
+                    .process(mb.take().unwrap(), &alloc)
                     .expect("could not deflate");
-                mb = Some(inflate.process(compressed).expect("could not inflate"));
+                mb = Some(
+                    inflate
+                        .process(compressed, &alloc)
+                        .expect("could not inflate"),
+                );
             }
         });
     }

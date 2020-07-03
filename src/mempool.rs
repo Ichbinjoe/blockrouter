@@ -168,7 +168,11 @@ impl<'a> DirectBuf for Part<'a> {
     }
 }
 
-impl<'a> DirectBufMut for Part<'a> {}
+impl<'a> DirectBufMut for Part<'a> {
+    unsafe fn bytes_mut_assume_init(&mut self) -> &mut [u8] {
+        std::slice::from_raw_parts_mut(self.data.ptr, self.data.len)
+    }
+}
 
 pub struct TLMemPool {
     pub cache: Vec<*mut u8>,

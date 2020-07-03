@@ -22,8 +22,8 @@ use super::parser;
 
 #[derive(Debug)]
 pub struct Frame<T: cursor::DirectBuf> {
-    packet: cursor::Multibytes<T>,
-    data_start: cursor::Cursor,
+    pub packet: cursor::Multibytes<T>,
+    pub data_start: cursor::Cursor,
 }
 
 pub struct FrameIter<'a, T: cursor::DirectBuf> {
