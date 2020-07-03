@@ -19,7 +19,7 @@
 extern crate libc;
 use libc::*;
 
-use std::mem::{size_of, MaybeUninit};
+use std::mem::size_of;
 
 static ZLIB_MAJ_VERSION: &str = "1";
 
@@ -69,7 +69,7 @@ extern "C" {
 }
 
 #[repr(i32)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ZLibError {
     Errno = -1,
     StreamError = -2,

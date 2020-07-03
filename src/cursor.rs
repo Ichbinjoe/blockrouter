@@ -48,6 +48,13 @@ impl DirectBuf for BytesMut {
     }
 }
 
+impl DirectBufMut for BytesMut {
+    unsafe fn bytes_mut_assume_init(&mut self) -> &mut [u8] {
+        // look, if you thought this was safe you came to the wrong place
+        std::mem::transmute(self.bytes_mut())
+    }
+}
+
 pub trait SliceCursor: bytes::Buf {
     fn has_atleast(&self, len: usize) -> bool {
         self.remaining() >= len

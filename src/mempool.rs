@@ -182,6 +182,18 @@ pub trait BlockAllocator<'a, T> {
     fn allocate(&'a self) -> T;
 }
 
+pub struct SystemMemPool {
+    pub buf_size: usize,
+}
+
+impl<'a> BlockAllocator<'a, bytes::BytesMut> for SystemMemPool {
+    fn allocate(&'a self) -> bytes::BytesMut {
+        let mut b = bytes::BytesMut::with_capacity(1 << self.buf_size);
+        unsafe { b.set_len(1 << self.buf_size) };
+        b
+    }
+}
+
 pub struct GlobalMemPool {
     memory: SegQueue<*mut u8>,
     lk: &'static std::thread::LocalKey<RefCell<TLMemPool>>,
@@ -314,16 +326,14 @@ mod tests {
     global_mempool_tlmp!(smoke_test_pool, 64);
     #[test]
     fn smoke_test() {
-        let allocator = unsafe {
-            GlobalMemPool::new(
-                &smoke_test_pool,
-                GlobalMemPoolSettings {
-                    buf_size: 12,
-                    concurrent_allocation_limit: 1,
-                    page_entries: 64,
-                },
-            )
-        };
+        let allocator = GlobalMemPool::new(
+            &smoke_test_pool,
+            GlobalMemPoolSettings {
+                buf_size: 12,
+                concurrent_allocation_limit: 1,
+                page_entries: 64,
+            },
+        );
 
         for i in 0..10000 {
             let mut buffer = GlobalMemPool::allocate(&allocator);
@@ -334,16 +344,14 @@ mod tests {
     global_mempool_tlmp!(bench_simple_tl_hot_pool, 64);
     #[bench]
     fn bench_simple_tl_hot(b: &mut Bencher) {
-        let allocator = unsafe {
-            GlobalMemPool::new(
-                &bench_simple_tl_hot_pool,
-                GlobalMemPoolSettings {
-                    buf_size: 12,
-                    concurrent_allocation_limit: 1,
-                    page_entries: 64,
-                },
-            )
-        };
+        let allocator = GlobalMemPool::new(
+            &bench_simple_tl_hot_pool,
+            GlobalMemPoolSettings {
+                buf_size: 12,
+                concurrent_allocation_limit: 1,
+                page_entries: 64,
+            },
+        );
 
         for _i in 0..10000 {
             let buffer = GlobalMemPool::allocate(&allocator);
@@ -360,16 +368,14 @@ mod tests {
     global_mempool_tlmp!(bench_simple_tl_cold_pool, 0);
     #[bench]
     fn bench_simple_tl_cold(b: &mut Bencher) {
-        let allocator = unsafe {
-            GlobalMemPool::new(
-                &bench_simple_tl_cold_pool,
-                GlobalMemPoolSettings {
-                    buf_size: 12,
-                    concurrent_allocation_limit: 1,
-                    page_entries: 64,
-                },
-            )
-        };
+        let allocator = GlobalMemPool::new(
+            &bench_simple_tl_cold_pool,
+            GlobalMemPoolSettings {
+                buf_size: 12,
+                concurrent_allocation_limit: 1,
+                page_entries: 64,
+            },
+        );
         for _i in 0..10000 {
             let buffer = GlobalMemPool::allocate(&allocator);
             test::black_box(buffer);
