@@ -16,7 +16,12 @@
  */
 
 #![feature(test)]
+#![feature(option_expect_none)]
 #![feature(new_uninit)]
+#![feature(maybe_uninit_uninit_array)]
+#![feature(untagged_unions)]
+#![feature(cell_update)]
+#![feature(maybe_uninit_extra)]
 
 extern crate bytes;
 extern crate nom;
@@ -25,12 +30,15 @@ extern crate tokio;
 #[macro_use]
 pub mod mempool;
 
+pub mod buffer;
 pub mod compress;
 pub mod crypto;
 pub mod cursor;
+pub mod direct;
 pub mod framer;
 pub mod inflater;
 pub mod mbedtls;
+pub mod packet;
 pub mod parser;
 pub mod socket;
 pub mod zlib;
