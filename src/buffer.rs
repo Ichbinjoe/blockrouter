@@ -50,10 +50,20 @@ pub struct FramedRing<T> {
 }
 
 impl<T> FramedRing<T> {
-    pub fn frame<'ring>(&'ring mut self) -> RingFrameMut<'ring, T> {
-        // Why does this take a mut? Because this action is only valid if there are no other frames
-        // which exist for this ring.
+    pub fn new() -> Self {
+        FramedRing{
+            ring: Cell::new(std::ptr::null_mut()),
+            base: Cell::new(0),
+            head: Cell::new(0),
+            ring_size_2: Cell::new(0),
+        }
+    }
+
+    pub fn frame<'ring>(&'ring self) -> RingFrameMut<'ring, T> {
         let start = self.head.get();
+        if start != self.base.get() {
+            panic!("attempting to start a new root frame with already-modifiable frames are using this ring");
+        }
 
         self.append_to_ring(RingElement {
             header: FrameHeader {
@@ -83,9 +93,9 @@ impl<T> FramedRing<T> {
         self.head.set(old_head + 1);
 
         let base_i = self.base.get() & mask;
-        let head_i = self.head.get() & mask;
+        let old_head_i = old_head & mask;
 
-        if base_i == head_i {
+        if base_i == old_head_i {
             unsafe {
                 // We have run out of space, double the size and copy stuff over in a way that
                 // isn't stupid
@@ -113,7 +123,7 @@ impl<T> FramedRing<T> {
 
                 // The pivot point is the end of array / start of array transition. This is the
                 // point which our memcpys will pivot around.
-                let pivot_point = self.head.get() & (!mask);
+                let pivot_point = old_head & (!mask);
 
                 // After this point, mask now refers to the mask of the new buffer
                 mask = new_len - 1;
@@ -129,7 +139,7 @@ impl<T> FramedRing<T> {
                 std::ptr::copy_nonoverlapping(
                     self.ring.get(),
                     new_buffer.add(pivot_point & mask),
-                    self.head.get() - pivot_point,
+                    old_head - pivot_point,
                 );
 
                 let old_buffer_layout = alloc::Layout::from_size_align_unchecked(
@@ -154,7 +164,7 @@ impl<T> FramedRing<T> {
     }
 
     pub fn try_promote<'ring>(
-        &'ring mut self,
+        &'ring self,
         frame: RingFrame<'ring, T>,
     ) -> Option<RingFrameMut<'ring, T>> {
         unsafe {
@@ -162,18 +172,22 @@ impl<T> FramedRing<T> {
             if header.next != self.head.get() {
                 None
             } else {
-                Some(RingFrameMut {
+                let r = Some(RingFrameMut {
                     f: RingFrame {
                         ring: self,
                         start: frame.start,
                         live_at: frame.live_at,
                     },
-                })
+                });
+
+                std::mem::forget(frame);
+
+                return r
             }
         }
     }
 
-    pub fn promote<'ring>(&'ring mut self, frame: RingFrame<'ring, T>) -> RingFrameMut<'ring, T> {
+    pub fn promote<'ring>(&'ring self, frame: RingFrame<'ring, T>) -> RingFrameMut<'ring, T> {
         self.try_promote(frame).unwrap()
     }
 
@@ -235,7 +249,7 @@ impl<'ring, T> Drop for RingFrame<'ring, T> {
             let mask = self.ring.mask();
             let mut header = &mut self.ring.get_masked_mut(self.start & mask).header;
             if std::mem::needs_drop::<T>() {
-                for i in self.live_at + 1..header.next {
+                for i in self.live_at..header.next {
                     ManuallyDrop::drop(&mut self.ring.get_masked_mut(i & mask).element);
                 }
             }
@@ -405,12 +419,146 @@ impl<'ring, T> RingFrameMut<'ring, T> {
                 element: ManuallyDrop::new(element),
             });
 
-            let mut header = self.f.ring.get_mut(self.f.start).header;
-            header.next += 1;
+            self.f.ring.get_mut(self.f.start).header.next += 1;
         }
     }
 
     pub fn inner<'a>(&'a self) -> &'a RingFrame<'ring, T> {
         &self.f
+    }
+
+    pub fn downgrade(self) -> RingFrame<'ring, T> {
+        self.f
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ring_basic() {
+        let mut ring = FramedRing::<i32>::new();
+        let frame = ring.frame();
+        for i in 0..1024 {
+            frame.append(i);
+        }
+
+        let (frame_ro, frame2) = frame.next();
+        
+        for i in 0..1024 {
+            frame2.append(i);
+        }
+
+        for i in 0..1024 {
+            assert_eq!(*frame_ro.get(i).unwrap(), i as i32);
+        }
+    }
+
+    #[test]
+    fn ring_repromote() {
+        let ring = FramedRing::<i32>::new();
+        let frame = ring.frame();
+        for i in 0..512 {
+            frame.append(i);
+        }
+        
+        let (frame_ro, frame2) = frame.next();
+        
+        for i in 0..1024 {
+            frame2.append(i);
+        }
+
+        drop(frame2);
+
+        let frame3 = ring.promote(frame_ro);
+
+        for i in 512..1024 {
+            frame3.append(i);
+        }
+
+        for i in 0..1024 {
+            assert_eq!(*frame3.inner().get(i).unwrap(), i as i32);
+        }
+
+        assert_eq!(frame3.inner().get(1024), None);
+    }
+
+    #[test]
+    #[should_panic]
+    fn ring_double_frame_no_drop() {
+        let ring = FramedRing::<i32>::new();
+        let frame = ring.frame();
+        let frame2 = ring.frame();
+    }
+
+    #[test]
+    #[should_panic]
+    fn ring_bad_promote() {
+        let ring = FramedRing::<i32>::new();
+        let frame = ring.frame();
+        let (frame_ro, frame2) = frame.next();
+
+        ring.promote(frame_ro);
+    }
+
+    #[test]
+    fn ring_iter() {
+        let ring = FramedRing::<i32>::new();
+        let frame = ring.frame();
+        for i in 0..512 {
+            frame.append(i);
+        }
+
+        let mut itr = frame.inner().iter();
+        for i in 0..512 {
+            assert_eq!(*itr.next().unwrap(), i);
+        }
+        assert_eq!(itr.next(), None);
+    }
+   
+    #[test]
+    fn ring_into_iter() {
+        let ring = FramedRing::<i32>::new();
+        let frame = ring.frame();
+        for i in 0..512 {
+            frame.append(i);
+        }
+
+        let mut itr = frame.downgrade().into_iter();
+        for i in 0..512 {
+            assert_eq!(itr.next().unwrap(), i);
+        }
+        assert_eq!(itr.next(), None);
+    }
+    
+    struct Dropchecker {
+        dropped: *mut bool
+    }
+
+    impl Drop for Dropchecker {
+        fn drop(&mut self) {
+            unsafe {*self.dropped = true;}
+        }
+    }
+
+    #[test]
+    fn ring_into_iter_premature_drop() {
+        let ring = FramedRing::<Dropchecker>::new();
+        let frame = ring.frame();
+        let mut dropped_a = false;
+        let mut dropped_b = false;
+        frame.append(Dropchecker{dropped: &mut dropped_a});
+        frame.append(Dropchecker{dropped: &mut dropped_b});
+        assert_eq!(dropped_a, false);
+        assert_eq!(dropped_b, false);
+
+        let mut itr = frame.downgrade().into_iter();
+        drop(itr.next());
+        assert_eq!(dropped_a, true);
+        assert_eq!(dropped_b, false);
+        drop(itr);
+        assert_eq!(dropped_a, true);
+        assert_eq!(dropped_b, true);
     }
 }
