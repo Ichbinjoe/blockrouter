@@ -30,7 +30,6 @@ extern crate tokio;
 #[macro_use]
 pub mod mempool;
 
-pub mod buffer;
 pub mod compress;
 pub mod crypto;
 pub mod cursor;
@@ -40,6 +39,7 @@ pub mod inflater;
 pub mod mbedtls;
 pub mod packet;
 pub mod parser;
+pub mod ring;
 pub mod socket;
 pub mod zlib;
 
